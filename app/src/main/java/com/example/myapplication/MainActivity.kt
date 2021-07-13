@@ -6,7 +6,10 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.ListView
+import android.widget.ProgressBar
 import android.widget.SimpleAdapter
 
 
@@ -17,6 +20,12 @@ import com.google.android.material.snackbar.Snackbar
 
 import com.google.android.material.textfield.TextInputEditText
 import com.wolfram.alpha.WAEngine
+import com.wolfram.alpha.WAPlainText
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.lang.StringBuilder
 
 class MainActivity : AppCompatActivity() {
     val TAG: String = "MainActivity"
@@ -26,22 +35,11 @@ class MainActivity : AppCompatActivity() {
     lateinit var requestInput: TextInputEditText
     lateinit var podsAdapter: SimpleAdapter
 
+    lateinit var progressBar: ProgressBar
+
     lateinit var waEngine: WAEngine
 
-    val pods = mutableListOf<HashMap<String, String>>(
-        HashMap<String, String>().apply {
-            put("Title", "Title 1")
-            put("Content", "Content 1")
-        },
-        HashMap<String, String>().apply {
-            put("Title", "Title 2")
-            put("Content", "Content 2")
-        },
-        HashMap<String, String>().apply {
-            put("Title", "Title 3")
-            put("Content", "Content 3")
-        }
-    )
+    val pods = mutableListOf<HashMap<String, String>>()
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,6 +56,17 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
 
         requestInput = findViewById(R.id.text_input_edit)
+        requestInput.setOnEditorActionListener { v, actionId, event ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                pods.clear()
+                podsAdapter.notifyDataSetChanged()
+
+                val question = requestInput.text.toString()
+                askWolfram(question)
+
+            }
+            return@setOnEditorActionListener false
+        }
 
         val podsList: ListView = findViewById(R.id.pods_list)
 
@@ -76,6 +85,8 @@ class MainActivity : AppCompatActivity() {
         voiceInputButton.setOnClickListener {
             Log.d(TAG, "FAB")
         }
+
+        progressBar = findViewById(R.id.progress_bar)
     }
 
     //переопределяем системный метод, который отрисовывает меню
@@ -92,7 +103,9 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             R.id.action_clear -> {
-                Log.d(TAG, "action_clear")
+                requestInput.text?.clear()
+                pods.clear()
+                podsAdapter.notifyDataSetChanged()
                 return true
             }
         }
@@ -115,5 +128,56 @@ class MainActivity : AppCompatActivity() {
                 }
                 show()
             }
+    }
+
+    fun askWolfram(request: String) {
+        progressBar.visibility = View.VISIBLE
+        //переходим на поток IO
+        CoroutineScope(Dispatchers.IO).launch {
+            //создаём запрос
+            val query = waEngine.createQuery().apply { input = request }
+            kotlin.runCatching {
+                waEngine.performQuery(query)
+                //в случае успеха
+            }.onSuccess { result ->
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = View.GONE
+                    //обработать запрос - ответ
+                    if (result.isError) {
+                        showSnackbar(result.errorMessage)
+                        //выход из метода
+                        return@withContext
+                    }
+                    if (!result.isSuccess) {
+                        requestInput.error = getString(R.string.error_do_not_understand)
+                        return@withContext
+                    }
+                    for (pod in result.pods) {
+                        if (!pod.isError) continue
+                        val content = StringBuilder()
+                        for (subpod in pod.subpods) {
+                            for (element in subpod.contents) {
+                                if (element is WAPlainText) {
+                                    content.append(element.text)
+                                }
+                            }
+                        }
+                        pods.add(0, HashMap<String, String>().apply {
+                            put("Title", pod.title)
+                            put("Content", content.toString())
+                        })
+                    }
+                    //встряхиваем Adapter?
+                    podsAdapter.notifyDataSetChanged()
+                }
+                //типа try catch
+            }.onFailure { t ->
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = View.GONE
+                    //обработать ошибку
+                    showSnackbar(t.message ?: getString(R.string.error_something_went_wrong))
+                }
+            }
+        }
     }
 }
