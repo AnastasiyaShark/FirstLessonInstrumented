@@ -182,7 +182,7 @@ class MainActivity : AppCompatActivity() {
                         return@withContext
                     }
                     for (pod in result.pods) {
-                        if (!pod.isError) continue
+                        if (pod.isError) continue
                         val content = StringBuilder()
                         for (subpod in pod.subpods) {
                             for (element in subpod.contents) {
